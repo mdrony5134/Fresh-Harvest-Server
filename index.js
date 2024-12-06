@@ -2,13 +2,15 @@ const express = require("express");
 const app = express();
 const cors = require("cors");
 require("dotenv").config();
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
-const port = process.env.port || 5000;
+const port = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
 
-const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.ajv0g.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -22,8 +24,64 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    const productCollection = client.db("productDB").collection("products");
-    const cartCollection = client.db("productDB").collection("cart");
+    const db = client.db("productDB");
+    const productCollection = db.collection("products");
+    const cartCollection = db.collection("cart");
+    const usersCollection = db.collection("users");
+
+    // Register Route
+    app.post("/register", async (req, res) => {
+      const { username, email, password } = req.body;
+
+      // Check if user already exists
+      const existingUser = await usersCollection.findOne({ email });
+      if (existingUser) {
+        return res.status(400).json({ message: "User already exists!" });
+      }
+
+      // Hash the password
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Insert new user into the database
+      try {
+        const newUser = { username, email, password: hashedPassword };
+        const result = await usersCollection.insertOne(newUser);
+
+        // Generate JWT token
+        const token = jwt.sign({ id: result.insertedId }, process.env.JWT_SECRET, {
+          expiresIn: "1h",
+        });
+
+        res.status(201).json({ message: "User registered successfully!", token });
+      } catch (error) {
+        console.error("Error registering user:", error);
+        res.status(500).json({ message: "Failed to register user" });
+      }
+    });
+
+    // Login Route
+    app.post("/login", async (req, res) => {
+      const { email, password } = req.body;
+
+      // Find user by email
+      const user = await usersCollection.findOne({ email });
+      if (!user) {
+        return res.status(400).json({ message: "User not found!" });
+      }
+
+      // Check if password is correct
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(400).json({ message: "Invalid credentials!" });
+      }
+
+      // Generate JWT token
+      const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+        expiresIn: "1h",
+      });
+
+      res.status(200).json({ message: "Login successful!", token });
+    });
 
     app.get("/products", async (req, res) => {
       const cursor = productCollection.find();
@@ -38,7 +96,7 @@ async function run() {
       res.send(result);
     });
 
-    // single product api
+    // Single Product API
     app.get("/products/:id", async (req, res) => {
       const id = req.params.id;
       try {
@@ -84,6 +142,7 @@ async function run() {
       }
     });
 
+    // Delete item from cart
     app.delete("/cart/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -115,7 +174,7 @@ async function run() {
 run().catch(console.dir);
 
 app.get("/", (req, res) => {
-  res.send("Fresh harvest gorocery server is running...");
+  res.send("Fresh harvest grocery server is running...");
 });
 
 app.listen(port, () => {
